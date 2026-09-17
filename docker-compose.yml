@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: physioghar-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-physioghar}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-physioghar}
+      POSTGRES_DB: ${DB_NAME:-physioghar}
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - '${DB_PORT:-5432}:5432'
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-physioghar} -d ${DB_NAME:-physioghar}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Separate, throwaway database for e2e tests (data kept in memory).
+  db-test:
+    image: postgres:17-alpine
+    container_name: physioghar-db-test
+    profiles: ['test']
+    environment:
+      POSTGRES_USER: physioghar
+      POSTGRES_PASSWORD: physioghar
+      POSTGRES_DB: physioghar_test
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - '5433:5432'
+    tmpfs:
+      - /var/lib/postgresql/data
+
+volumes:
+  db-data:
