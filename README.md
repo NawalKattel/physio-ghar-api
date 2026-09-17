@@ -187,6 +187,27 @@ Timestamps are stored as UTC (`timestamptz`). Day boundaries, such as "today" on
 | Time zones | `date-fns` and `date-fns-tz` |
 | API docs | `@nestjs/swagger` with the CLI plugin, which builds schemas from the DTOs |
 
+### Packages
+
+| Package | Version | Why it's here |
+| --- | --- | --- |
+| `@nestjs/common`, `@nestjs/core`, `@nestjs/platform-express` | 11 | The framework and its Express HTTP layer |
+| `@nestjs/config` | 4 | Loads `.env` and runs the Zod check at startup |
+| `zod` | 4 | Validates environment variables |
+| `@nestjs/typeorm`, `typeorm`, `pg` | 11, 0.3, 8 | Postgres access, entities and migrations |
+| `class-validator`, `class-transformer` | 0.15, 0.5 | Request validation and type conversion from DTO decorators |
+| `@nestjs/jwt` | 11 | Signs and verifies access tokens |
+| `@nestjs/passport`, `passport`, `passport-jwt` | 11, 0.7, 4 | Reads the bearer token and populates the signed-in therapist |
+| `argon2` | 0.45 | Password hashing |
+| `@nestjs/throttler` | 6 | Rate limiting |
+| `date-fns`, `date-fns-tz` | 4, 3 | Time-zone conversion and day boundaries |
+| `@nestjs/swagger` | 11 | OpenAPI document and the docs page |
+| `dotenv` | 17 | Loads `.env` for the TypeORM CLI, which runs outside Nest |
+
+Dev tooling: `@nestjs/cli`, TypeScript 5.7, `ts-node`, Jest with `ts-jest`, `supertest`, ESLint and Prettier.
+
+**Version warning:** this project is Nest 11 compiled to CommonJS. Keep every `@nestjs/*` add-on on its Nest 11 major. The newer majors (`@nestjs/swagger@12`, `@nestjs/typeorm@12`, `@nestjs/jwt@12`, `@nestjs/config@12`, `@nestjs/passport@12`, `typeorm@1`) are ESM-only and crash on startup. `pnpm add @nestjs/<pkg>` installs the newest by default, so pin the major explicitly.
+
 ---
 
 ## Database schema
@@ -259,19 +280,70 @@ The spec leaves these open. This is how the API behaves today; each is a small c
 | Session duration vs. slot duration | Stored separately, both default to 60; not cross-checked |
 | Who creates patients and booking requests? | The patient app. This API only reads them; use `pnpm seed` for local data |
 
-## Swagger and DTO documentation
+## API documentation (Swagger)
 
-The Swagger schemas are generated from the DTO classes by the `@nestjs/swagger` CLI plugin configured in `nest-cli.json`. With `introspectComments` on, the plugin turns a property's doc comment into its description, and an `@example` tag into its example value:
+Built with [`@nestjs/swagger`](https://docs.nestjs.com/openapi/introduction) 11, which generates an OpenAPI 3 document from the code.
+
+| | |
+| --- | --- |
+| Docs page | `http://localhost:3000/api` |
+
+
+To call a protected endpoint from the page: run `POST /v1/auth/login`, copy `accessToken` from the response, click **Authorize**, paste it, then use **Try it out**. The token is remembered across page reloads.
+
+### How it's set up
+
+**[src/main.ts](src/main.ts)** builds the document. `DocumentBuilder` sets the title, version, the tag order used for the sections, and the bearer-token security scheme:
 
 ```ts
-export class RescheduleSessionDto {
-  /** @example 2026-09-17T11:00:00+05:45 */
-  @IsDateTimeWithOffset()
-  start!: string;
-}
+const config = new DocumentBuilder()
+  .setTitle('PhysioGhar Therapist API')
+  .setVersion('1.0')
+  .addTag('Auth')
+  .addBearerAuth()
+  .build();
+const documentFactory = () => SwaggerModule.createDocument(app, config);
+SwaggerModule.setup('api', app, documentFactory);
 ```
 
-Properties without a doc comment still appear in the docs, just with no description or example. So adding one is worth it wherever the field name alone doesn't explain the format or the rule.
+**[nest-cli.json](nest-cli.json)** enables the Swagger CLI plugin, which is what keeps the docs in step with the code without hand-written schemas:
+
+```json
+{ "name": "@nestjs/swagger",
+  "options": { "classValidatorShim": true, "introspectComments": true,
+               "dtoFileNameSuffix": [".dto.ts", ".entity.ts"] } }
+```
+
+- **Property types** in DTO classes become the schema, so `remarks: string | null` is documented without an `@ApiProperty` decorator.
+- **`classValidatorShim`** turns `class-validator` rules into schema constraints, so `@MaxLength(80)` shows as `maxLength: 80`.
+- **`introspectComments`** turns a property's doc comment into its description, and an `@example` tag into its example value:
+
+  ```ts
+  export class RescheduleSessionDto {
+    /** @example 2026-09-17T11:00:00+05:45 */
+    @IsDateTimeWithOffset()
+    start!: string;
+  }
+  ```
+
+  A property with no doc comment still appears, just with no description or example. Worth adding wherever the field name alone doesn't explain the format or the rule.
+
+**Controllers** add what the plugin can't infer:
+
+| Decorator | Purpose |
+| --- | --- |
+| `@ApiTags('Sessions')` | Which section the endpoints appear under |
+| `@ApiBearerAuth()` | Marks the endpoint as needing a token |
+| `@ApiOkResponse({ type: SessionDto })` | The success response shape, and `@ApiCreatedResponse` / `@ApiNoContentResponse` for 201 and 204 |
+| `@ApiConflictResponse({ type: ApiErrorDto, description: 'SLOT_BOOKED' })` | Error responses, with the error code in the description |
+
+Errors all use `ApiErrorDto` ([src/common/errors/api-error.dto.ts](src/common/errors/api-error.dto.ts)), so every failure in the docs has the same shape as the real response.
+
+### Notes
+
+- The docs are served at `/api`, outside the `/v1` prefix, because `SwaggerModule.setup` ignores the global prefix by default.
+- They're currently served in every environment. To hide them in production, wrap the `SwaggerModule` block in `if (process.env.NODE_ENV !== 'production')`.
+- To save the spec to a file, e.g. for the app team or a client generator: `curl http://localhost:3000/api-json > openapi.json`.
 
 ## Not done yet
 
